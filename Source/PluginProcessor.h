@@ -55,6 +55,9 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     void setRingBuffer(std::shared_ptr<RingBuffer<GLfloat>> ringBuffer) { this->ringBuffer = ringBuffer; }
+    
+    juce::AudioParameterInt* zoom;
+
 private:
     std::shared_ptr<RingBuffer<GLfloat>> ringBuffer;
   

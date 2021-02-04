@@ -1,81 +1,77 @@
+//
+//  Oscilloscope2D.h
+//  3DAudioVisualizers
+//
+//  Created by Tim Arterbury on 4/29/17.
+//
+//
+
 #pragma once
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "RingBuffer.h"
 
-//#define RING_BUFFER_READ_SIZE   4096
-#define VIZ_POINTS  512
+/** This 2D Oscilloscope uses a Fragment-Shader based implementation.
+ 
+    Future Update: modify the fragment-shader to do some visual compression so
+    you can see both soft and loud movements easier. Currently, the most loud
+    parts of a song to a bit too far out of the frame and the soft parts don't
+    always move the wave very much.
+ */
 
-#define _STR_HELPER(x) #x
-#define STR(x) _STR_HELPER(x)
+#define RING_BUFFER_READ_SIZE 256
 
-class Vizz : public juce::Component,
-             public juce::OpenGLRenderer,
-             public juce::AsyncUpdater
+class Oscilloscope2D :  public juce::Component,
+                        public juce::OpenGLRenderer,
+                        public juce::AsyncUpdater
 {
+    
 public:
-    Vizz (std::shared_ptr<RingBuffer<GLfloat>> ringBuffer)
-            : readBuffer (2, ringBuffer->getBufferSize()), forwardFFT (fftOrder)
+    
+    Oscilloscope2D (RingBuffer<GLfloat> * ringBuffer)
+    : readBuffer (2, RING_BUFFER_READ_SIZE)
     {
         // Sets the OpenGL version to 3.2
         openGLContext.setOpenGLVersionRequired (juce::OpenGLContext::OpenGLVersion::openGL3_2);
         
         this->ringBuffer = ringBuffer;
-
-        // Allocate FFT data
-        //fftData = new GLfloat [2 * fftSize];
-
+        
         // Attach the OpenGL context but do not start [ see start() ]
         openGLContext.setRenderer(this);
         openGLContext.attachTo(*this);
         
-        // Setup a pixel format object to tell the context what level of
-        // multisampling to use.
-        juce::OpenGLPixelFormat pixelFormat;
-        pixelFormat.multisamplingLevel = 4; // Change this value to your needs.
-        
-        openGLContext.setPixelFormat(pixelFormat);
-        
         // Setup GUI Overlay Label: Status of Shaders, compiler errors, etc.
-        //addAndMakeVisible (statusLabel);
-        //statusLabel.setJustificationType (juce::Justification::topLeft);
-        //statusLabel.setFont (juce::Font (14.0f));
-        
-        juce::FloatVectorOperations::clear (visualizationBuffer, VIZ_POINTS);
-
-        warmth = 0.0f;
-        cool = 0.0f;
+        addAndMakeVisible (statusLabel);
+        statusLabel.setJustificationType (juce::Justification::topLeft);
+        statusLabel.setFont (juce::Font (14.0f));
     }
     
-    ~Vizz()
+    ~Oscilloscope2D()
     {
-        
-        shader.release();
-        uniforms.release();
+        shader = nullptr;
+        uniforms = nullptr;
       
         // Turn off OpenGL
         openGLContext.setContinuousRepainting (false);
         openGLContext.detach();
         
-        //delete [] fftData;
-
         // Detach ringBuffer
         ringBuffer = nullptr;
     }
     
     void handleAsyncUpdate() override
     {
-        //statusLabel.setText (statusText, juce::dontSendNotification);
+        statusLabel.setText (statusText, juce::dontSendNotification);
     }
     
-
-    // Control Functions
-
+    //==========================================================================
+    // Oscilloscope2D Control Functions
+    
     void start()
     {
         openGLContext.setContinuousRepainting (true);
     }
-  
+    
     void stop()
     {
         openGLContext.setContinuousRepainting (false);
@@ -108,21 +104,6 @@ public:
         uniforms.release();
     }
     
-    // Normalized to the kernel_size
-    void convolution(float* arr, size_t arr_size, float* kernel, size_t kernel_size, std::vector<float>& res) {
-        if (res.size() != arr_size - kernel_size + 1) {
-            res = std::vector<float>(arr_size - kernel_size + 1, 0.0f);
-        }
-        
-        for (size_t start = 0; start < res.size(); start++) {
-            // Integrating
-            double sum = 0.0;
-            for (size_t i = 0; i < kernel_size; i++) {
-                sum += arr[i + start] * kernel[i];
-            }
-            res[start] = sum;
-        }
-    }
     
     /** The OpenGL rendering callback.
      */
@@ -132,10 +113,7 @@ public:
         
         // Setup Viewport
         const float renderingScale = (float) openGLContext.getRenderingScale();
-        glViewport (0, 0,
-                    juce::roundToInt (renderingScale * getWidth()),
-                    juce::roundToInt (renderingScale * getHeight())
-        );
+        glViewport (0, 0, juce::roundToInt (renderingScale * getWidth()), juce::roundToInt (renderingScale * getHeight()));
         
         // Set background Color
         juce::OpenGLHelpers::clear (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
@@ -148,107 +126,26 @@ public:
         shader->use();
         
         // Setup the Uniforms for use in the Shader
+        
         if (uniforms->resolution != nullptr)
             uniforms->resolution->set ((GLfloat) renderingScale * getWidth(), (GLfloat) renderingScale * getHeight());
-
+        
         // Read in samples from ring buffer
-        if (uniforms->audioSampleData != nullptr && ringBuffer != nullptr)
+        if (uniforms->audioSampleData != nullptr)
         {
-            if (zoom < 1) zoom = 1;
-            if (zoom > 4) zoom = 4;
-            float K = zoom;
-          
-            if (current.size() != ringBuffer->getBufferSize() / K) {
-                current = std::vector<float>(ringBuffer->getBufferSize() / K, 0.0);
-            } else {
-                std::fill(current.begin(), current.end(), 0.0);
+            ringBuffer->readSamples (readBuffer, RING_BUFFER_READ_SIZE);
+            
+            juce::FloatVectorOperations::clear (visualizationBuffer, RING_BUFFER_READ_SIZE);
+            
+            // Sum channels together
+            for (int i = 0; i < 2; ++i)
+            {
+                juce::FloatVectorOperations::add (visualizationBuffer, readBuffer.getReadPointer(i, 0), RING_BUFFER_READ_SIZE);
             }
             
-            ringBuffer->readSamples (readBuffer, ringBuffer->getBufferSize());
-            
-            // Copying the data
-            for (int smp = 0; smp < ringBuffer->getBufferSize(); smp++) {
-                current[smp / K] += (*(float*)readBuffer.getReadPointer(0, smp) + *(float*)readBuffer.getReadPointer(1, smp)) / (2.0 * K);
-            }
-            
-            // Finding the correlation between current buffer and the former visualizationBuffer
-            convolution(&current[0], current.size(), visualizationBuffer, VIZ_POINTS, correlation);
-            
-            float corr_max = correlation[0];
-            size_t sync_pos = 0;
-            for (int i = 0; i < correlation.size(); i++) {
-                if (correlation[i] > corr_max) {
-                    corr_max = correlation[i];
-                    sync_pos = i;
-                }
-            }
-            
-            //std::cout << "corr_max: " << corr_max << ", sync_pos: " << sync_pos << std::endl;
-            for (int i = 0; i < VIZ_POINTS; i++) {
-                visualizationBuffer[i] = current[i + sync_pos];
-            }
-            
-            // Using FFT to measure warmth
-            std::vector<std::complex<float>> input(fftSize), output(fftSize);
-            std::fill(std::begin(input), std::end(input), 0.0);
-            std::fill(std::begin(output), std::end(output), 0.0);
-            
-            // Putting the samples into FFT buffer
-            for (int smp = 0; smp < fftSize; smp++) {
-                input[smp] += visualizationBuffer[smp];
-            }
-            forwardFFT.perform (&input[0], &output[0], false);
-            
-            // Searching for the max harmonic amplitude among the lowest ones
-            float max_harm = 0.0f;
-            
-            float avg_harm_warmth = 0.0f;
-            float avg_harm_warmth_norm = 0.0f;
-            float avg_harm_cool = 0.0f;
-            float avg_harm_cool_norm = 0.0f;
-
-            // Warmth should reflect low frequencies
-            for (int i = 0; i < 4; i++) {
-                if (std::abs(output[i].real()) > max_harm) {
-                    max_harm = std::abs(output[i].real());
-                }
-                avg_harm_warmth += std::abs(output[i].real()) / (i + 2);
-                avg_harm_warmth_norm += 12.0 / (i + 3);
-            }
-            avg_harm_warmth /= avg_harm_warmth_norm;
-            if (warmth < avg_harm_warmth) warmth = avg_harm_warmth;
-            if (warmth > 1.0) warmth = 1.0;
-            warmth *= 0.99;
-
-            // Cool should reflex high frequencies
-            for (int i = 20; i < fftSize / 2; i++) {
-                if (std::abs(output[i].real()) > max_harm) {
-                    max_harm = std::abs(output[i].real());
-                }
-                avg_harm_cool += 2.0 * std::abs(output[i].real()) * i;
-                avg_harm_cool_norm += i;
-            }
-            avg_harm_cool /= avg_harm_cool_norm;
-            if (cool < avg_harm_cool) cool = avg_harm_cool;
-            if (cool > 1.0) cool = 1.0;
-            cool *= 0.99;
-
-            /*int band = fftSize / 64;
-             if (max_harm_index < band) {
-             warmth = 1.0;
-             } else {
-             warmth = band / max_harm_index;
-             }*/
-            
-            std::cout << "warmth: " << warmth << ", cool: " << cool << std::endl;
-            
-
+            uniforms->audioSampleData->set (visualizationBuffer, 256);
         }
         
-        uniforms->warmth->set((GLfloat)warmth);
-        uniforms->cool->set((GLfloat)cool);
-        uniforms->audioSampleData->set(visualizationBuffer, VIZ_POINTS);
-
         // Define Vertices for a Square (the view plane)
         GLfloat vertices[] = {
             1.0f,   1.0f,  0.0f,  // Top Right
@@ -298,21 +195,17 @@ public:
         //openGLContext.extensions.glBindVertexArray(0);
     }
     
-    void setZoom(int zoom)
-    {
-        this->zoom = zoom;
-    }
     
     //==========================================================================
     // JUCE Callbacks
     
-    void paint (juce::Graphics& g) override
+  void paint (juce::Graphics& g) override
     {
     }
     
     void resized () override
     {
-        //statusLabel.setBounds (getLocalBounds().reduced (4).removeFromTop (75));
+        statusLabel.setBounds (getLocalBounds().reduced (4).removeFromTop (75));
     }
     
 private:
@@ -335,9 +228,7 @@ private:
         
         fragmentShader =
         "uniform vec2  resolution;\n"
-        "uniform float warmth;\n"
-        "uniform float cool;\n"
-        "uniform float audioSampleData[" STR(VIZ_POINTS) "];\n"
+        "uniform float audioSampleData[256];\n"
         "\n"
         "void getAmplitudeForXPos (in float xPos, out float audioAmplitude)\n"
         "{\n"
@@ -348,7 +239,7 @@ private:
         "   audioAmplitude = mix (audioSampleData[leftSampleIndex], audioSampleData[rightSampleIndex], fract (perfectSamplePosition));\n"
         "}\n"
         "\n"
-        "#define THICKNESS 0.01\n"
+        "#define THICKNESS 0.02\n"
         "void main()\n"
         "{\n"
         "    float y = gl_FragCoord.y / resolution.y;\n"
@@ -356,13 +247,10 @@ private:
         "    getAmplitudeForXPos (gl_FragCoord.x, amplitude);\n"
         "\n"
         // Centers & Reduces Wave Amplitude
-        "    amplitude = 0.5 - amplitude;\n"
-        "    float intensity = abs (THICKNESS / (amplitude - y)) + 0.25;\n"
-        "    float g = -1.5 * intensity * max(0, (y - 0.5) * (y - 0.5)) + 0.85 * intensity + 0.1 * warmth * warmth;\n"
-        "    float r = intensity * intensity + 1.5 * warmth * warmth * g * (1 - y) * (1 - y); \n"
-        "    float b = 0.7 * intensity * intensity + 0.10 + 2.5 * cool * cool * g * y * y; \n"
+        "    amplitude = 0.5 - amplitude / 2.5;\n"
+        "    float r = abs (THICKNESS / (amplitude-y));\n"
         "\n"
-        "    gl_FragColor = vec4 (r, g, b, 1.0);\n"
+        "gl_FragColor = vec4 (r - abs (r * 0.2), r - abs (r * 0.2), r - abs (r * 0.2), 1.0);\n"
         "}\n";
         
         std::unique_ptr<juce::OpenGLShaderProgram> shaderProgramAttempt = std::make_unique<juce::OpenGLShaderProgram> (openGLContext);
@@ -376,11 +264,11 @@ private:
             shader = std::move (shaderProgramAttempt);
             uniforms.reset (new Uniforms (openGLContext, *shader));
             
-            //statusText = "GLSL: v" + juce::String (juce::OpenGLShaderProgram::getLanguageVersion(), 2);
+            statusText = "GLSL: v" + juce::String (juce::OpenGLShaderProgram::getLanguageVersion(), 2);
         }
         else
         {
-            //statusText = shaderProgramAttempt->getLastError();
+            statusText = shaderProgramAttempt->getLastError();
         }
         
         triggerAsyncUpdate();
@@ -391,26 +279,18 @@ private:
     // This class just manages the uniform values that the fragment shader uses.
     struct Uniforms
     {
-        Uniforms (juce::OpenGLContext& openGLContext, juce::OpenGLShaderProgram& shaderProgram)
+      Uniforms (juce::OpenGLContext& openGLContext, juce::OpenGLShaderProgram& shaderProgram)
         {
             //projectionMatrix = createUniform (openGLContext, shaderProgram, "projectionMatrix");
             //viewMatrix       = createUniform (openGLContext, shaderProgram, "viewMatrix");
             
-            cool.reset (createUniform (openGLContext, shaderProgram, "cool"));
-            warmth.reset (createUniform (openGLContext, shaderProgram, "warmth"));
             resolution.reset (createUniform (openGLContext, shaderProgram, "resolution"));
             audioSampleData.reset (createUniform (openGLContext, shaderProgram, "audioSampleData"));
             
         }
         
-        ~Uniforms() {
-            cool = nullptr;
-            warmth = nullptr;
-            resolution = nullptr;
-            audioSampleData = nullptr;
-        }
-        
-        std::unique_ptr<juce::OpenGLShaderProgram::Uniform> resolution, warmth, cool, audioSampleData;
+        //ScopedPointer<OpenGLShaderProgram::Uniform> projectionMatrix, viewMatrix;
+      std::unique_ptr<juce::OpenGLShaderProgram::Uniform> resolution, audioSampleData;
         
     private:
         static juce::OpenGLShaderProgram::Uniform* createUniform (juce::OpenGLContext& openGLContext,
@@ -423,7 +303,8 @@ private:
             return new juce::OpenGLShaderProgram::Uniform (shaderProgram, uniformName);
         }
     };
-  
+    
+    
     // OpenGL Variables
     juce::OpenGLContext openGLContext;
     GLuint VBO, VAO, EBO;
@@ -431,39 +312,22 @@ private:
     std::unique_ptr<juce::OpenGLShaderProgram> shader;
     std::unique_ptr<Uniforms> uniforms;
     
-    float warmth, cool;
-    
     const char* vertexShader;
     const char* fragmentShader;
 
-    enum
-    {
-        fftOrder = 9,
-        fftSize  = 1 << fftOrder // set 10th bit to one
-    };
     
     // Audio Buffer
-    std::shared_ptr<RingBuffer<GLfloat>> ringBuffer;
+    RingBuffer<GLfloat> * ringBuffer;
     juce::AudioBuffer<GLfloat> readBuffer;    // Stores data read from ring buffer
-    GLfloat visualizationBuffer [VIZ_POINTS];    // Single channel to visualize
-  
-    int zoom;
+    GLfloat visualizationBuffer [RING_BUFFER_READ_SIZE];    // Single channel to visualize
+    
+    
     
     // Overlay GUI
-    /*juce::String statusText;
-    juce::Label statusLabel;*/
-  
-    // FFT
-    juce::dsp::FFT forwardFFT;
-    //GLfloat * fftData;
-    //size_t sample_index[1];
-                
-    std::vector<float> current;
-    std::vector<float> correlation;
-
-    // This is so that we can initialize fowardFFT in the constructor with the order
+    juce::String statusText;
+    juce::Label statusLabel;
     
-   
+    
     /** DEV NOTE
         If I wanted to optionally have an interchangeable shader system,
         this would be fairly easy to add. Chack JUCE Demo -> OpenGLDemo.cpp for
@@ -472,5 +336,5 @@ private:
         String newVertexShader, newFragmentShader;
      */
     
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Vizz)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Oscilloscope2D)
 };

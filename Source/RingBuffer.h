@@ -36,7 +36,8 @@ public:
         this->bufferSize = bufferSize;
         this->numChannels = numChannels;
         
-      audioBuffer = std::make_unique<juce::AudioBuffer<Type>> (numChannels, bufferSize);
+        audioBuffer = std::make_unique<juce::AudioBuffer<Type>> (numChannels, bufferSize);
+        audioBuffer->clear();
         writePosition = 0;
     }
     

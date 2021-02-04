@@ -25,7 +25,7 @@ private:
   
     std::shared_ptr<RingBuffer<GLfloat>> ringBuffer;
     Vizz scope2d;
-
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VizzAudioProcessorEditor)
 };
 

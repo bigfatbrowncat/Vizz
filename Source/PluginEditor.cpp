@@ -3,7 +3,8 @@
 
 VizzAudioProcessorEditor::VizzAudioProcessorEditor (VizzAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p), //mTextChangesListener(this),
-      ringBuffer(std::make_shared<RingBuffer<GLfloat>>(2, 2048)), scope2d(ringBuffer)
+      ringBuffer(std::make_shared<RingBuffer<GLfloat>>(2, 2048 + 1024)), scope2d(ringBuffer)
+
 {
     addAndMakeVisible(scope2d);
   
@@ -13,6 +14,10 @@ VizzAudioProcessorEditor::VizzAudioProcessorEditor (VizzAudioProcessor& p)
   
     p.addChangeListener (this);
     p.setRingBuffer(ringBuffer);
+  
+    // This doesn't work for AU
+    setResizeLimits (150, 300, 900, 300);
+    setResizable (true, true);
   
     scope2d.start();
 }
@@ -33,10 +38,11 @@ void VizzAudioProcessorEditor::paint (juce::Graphics& g)
 
 void VizzAudioProcessorEditor::resized()
 {
-    scope2d.setBounds(0, 0, 600, 300);
+    scope2d.setBounds(0, 0, getWidth(), getHeight());
 }
 
 void VizzAudioProcessorEditor::changeListenerCallback (juce::ChangeBroadcaster* source)
 {
+    scope2d.setZoom(audioProcessor.zoom->get());
     repaint();
 }

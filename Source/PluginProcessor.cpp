@@ -19,13 +19,15 @@ VizzAudioProcessor::VizzAudioProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ), zoom(new juce::AudioParameterInt("zoom", "Zoom", 1, 4, 2))
 #endif
 {
+    addParameter (zoom);
 }
 
 VizzAudioProcessor::~VizzAudioProcessor()
 {
+    
 }
 
 //==============================================================================
